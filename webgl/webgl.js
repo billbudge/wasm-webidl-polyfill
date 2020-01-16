@@ -2,10 +2,16 @@
 // load('webIDL.js');
 let webIDL = {loadWasm};
 
+let table = new WebAssembly.Table({ initial: 9, element: "anyref"});
+table.set(0, document);
+table.set(1, 'a-canvas');
+table.set(2, '2d');
+table.set(8, 'nonzero');
+
 let moduleImports = {
   env: {
     memory: new WebAssembly.Memory({ initial: 256, maximum: 256 }),
-    table: new WebAssembly.Table({ initial: 7, element: "anyref"}),
+    table: table,
   },
   // document,
   document: {

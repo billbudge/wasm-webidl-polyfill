@@ -1,359 +1,81 @@
-var debugEnabled = false;
-var debugIndentLevel = 0;
-function debug() {
-  if (debugEnabled) {
-    console.log.apply(this, ['[|DEBUG|]', '  '.repeat(debugIndentLevel), ...arguments]);
-  }
-}
-function debugIndent() {
-  if (arguments.length > 0) { debug.apply(null, arguments); }
-  debugIndentLevel += 1;
-}
-function debugDedent() {
-  debugIndentLevel -= 1;
-}
-function debugInstr(name, self, stack, args) {
-  debugIndent('in instruction', name);
-  debug('this =', self);
-  debug('stack =', stack);
-  if (args !== undefined) {
-    debug('args =', args);
-  }
-}
-
 function polyfill(module, imports, getExports) {
-  var u8, i32; // Memory views
-  function initMemory() {
-    if (u8) return;
-    debug('initializing memory');
-    var memory = getExports()['memory'] || imports['env'] && imports['env']['memory'];
-    u8 = new Uint8Array(memory.buffer);
-    i32 = new Int32Array(memory.buffer);
+  var memory = imports['env']['memory'];
+  var refMap = {};
+  var refs = [];
+  var u8 = memory && new Uint8Array(memory.buffer);
+  function utf8_cstr(ptr) {
+    var result = '';
+    var i = ptr;
+    while (u8[i] != 0) {
+      result += String.fromCharCode(u8[i]);
+      i++;
+    }
+    return result;
+  }
+  function utf8_outparam_buffer(str, ptr, bufferLength) {
+    var len = Math.min(str.length, bufferLength);
+    for (var i = 0; i < len; ++i) {
+      u8[ptr + i] = str.charCodeAt(i);
+    }
+    return len;
+  }
+  function alloc_utf8_cstr(args) {
+    var str = this.inExpr(args);
+    var addr = getExports()[this.name](str.length + 1);
+    for (var i = 0; i < str.length; ++i) {
+      u8[addr + i] = str.charCodeAt(i);
+    }
+    u8[addr + str.length] = 0;
+    return addr;
+  }
+  function utf8_ptr_len(ptr, len) {
+    var result = ''
+    for (var i = 0; i < len; ++i) {
+      result += String.fromCharCode(u8[ptr + i]);
+    }
+    return result;
+  }
+  function as_outgoing(x) {
+    return x;
+  }
+  function as_incoming(args) {
+    return this.inExpr(args);
+  }
+  function opaque_ptr_set(ref) {
+    var ptr = refs.length;
+    if (ref in refMap) {
+      ptr = refMap[ref];
+    } else {
+      refs.push(ref);
+      refMap[ref] = ptr;
+    }
+    return ptr;
+  }
+  function opaque_ptr_get(ptr) {
+    return refs[ptr];
   }
 
-  // Export declarations, used for call-export arities
-  const exportDecls = {};
-  // Original imported functions, accessed by index
-  const origImports = [];
-  // Table of references, converts i32 <-> any
-  const refTable = [];
-
-  // Type declarations
-  const typeMap = {
-    // Interface types
-    0x7fff: 'Int',
-    0x7ffe: 'Float',
-    0x7ffd: 'Any',
-    0x7ffc: 'String',
-    0x7ffb: 'Seq',
-
-    // Wasm types
-    0x7f: 'i32',
-    0x7e: 'i64',
-    0x7d: 'f32',
-    0x7c: 'f64',
-    0x6f: 'anyref',
+  var webidlTypes = {
+    0: 'DOMString',
+  }
+  var outgoingBindingTypes = {
+    0: [utf8_cstr],
   };
+  var encoders = {};
+  var decoders = {};
+  var exportFixups = {};
 
-  function pop(stack) {
-    return stack.splice(stack.length - 1, 1)[0];
-  }
-  function popN(stack, n) {
-    // Return an array of N items, in the order they were pushed
-    // e.g. stack = [4, 5, 6]; popN(stack, 2) == [5, 6]
-    return stack.splice(stack.length - n, n);
-  }
-  const Instructions = {
-    argGet(stack, args) {
-      debugInstr('argGet', this, stack, args);
-      stack.push(args[this.arg]);
-      debugDedent();
-    },
-    call(stack) {
-      debugInstr('call', this, stack);
-      const imp = origImports[this.importIdx];
-      debug('import decl =', imp);
-      const args = popN(stack, imp.params.length);
-      debug('args =', args);
-      const ret = imp.import.apply(null, args);
-      if (imp.results.length > 0) {
-        debug('ret =', ret);
-        stack.push(ret);
-      }
-      debugDedent();
-    },
-    callExport(stack) {
-      debugInstr('callExport', this, stack);
-      const exp = exportDecls[this.exportName];
-      debug('export decl =', exp);
-      const args = popN(stack, exp.params.length);
-      debug('args =', args);
-      const fn = getExports()[this.exportName];
-      const ret = fn.apply(null, args);
-      if (exp.results.length > 0) {
-        debug('ret =', ret);
-        stack.push(ret);
-      }
-      debugDedent();
-    },
-    readUtf8(stack) {
-      debugInstr('readUtf8', this, stack);
-      const len = pop(stack);
-      const ptr = pop(stack);
-      debug('ptr, len =', ptr, len);
-      initMemory();
-      let str = '';
-      for (var i = 0; i < len; ++i) {
-        str += String.fromCharCode(u8[ptr + i]);
-      }
-      debug('str =', str);
-      stack.push(str);
-      debugDedent();
-    },
-    writeUtf8(stack) {
-      debugInstr('writeUtf8', this, stack);
-      const str = pop(stack);
-      debug('str =', str);
-      const alloc = getExports()[this.alloc];
-      const len = str.length;
-      const ptr = alloc(len);
-      initMemory();
-      for (var i = 0; i < len; ++i) {
-        u8[ptr + i] = str.charCodeAt(i);
-      }
-      stack.push(ptr);
-      stack.push(len);
-      debugDedent();
-    },
-    asWasm(stack) {
-      debugInstr('asWasm', this, stack);
-      debugDedent();
-    },
-    asInterface(stack) {
-      debugInstr('asInterface', this, stack);
-      debugDedent();
-    },
-    tableRefAdd(stack) {
-      debugInstr('tableRefAdd', this, stack);
-      const ref = pop(stack);
-      debug('ref = ', ref);
-      const idx = refTable.length;
-      refTable.push(ref);
-      debug('refTable =', refTable);
-      debug('idx = ', idx);
-      stack.push(idx);
-      debugDedent();
-    },
-    tableRefGet(stack) {
-      debugInstr('tableRefGet', this, stack);
-      const idx = pop(stack);
-      debug('idx = ', idx);
-      debug('refTable =', refTable);
-      const ref = refTable[idx];
-      debug('ref = ', ref);
-      stack.push(ref);
-      debugDedent();
-    },
-    callMethod(stack) {
-      debugInstr('callMethod', this, stack);
-      const imp = origImports[this.importIdx];
-      debug('import decl =', imp);
-      const args = popN(stack, imp.params.length - 1);
-      const self = pop(stack);
-      debug('self =', self);
-      debug('args =', args);
-      const ret = imp.import.apply(self, args);
-      if (imp.results.length > 0) {
-        debug('ret =', ret);
-        stack.push(ret);
-      }
-      debugDedent();
-    },
-    makeRecord(stack) {
-      debugInstr('makeRecord', this, stack);
-      const decl = typeMap[this.ty];
-      debug('decl =', decl);
-      const ret = {};
-      const args = popN(stack, decl.fields.length);
-      debug('args =', args);
-      for (var i = 0; i < decl.fields.length; ++i) {
-        ret[decl.fields[i]] = args[i];
-      }
-      debug('ret =', ret);
-      stack.push(ret);
-      debugDedent();
-    },
-    getField(stack) {
-      debugInstr('getField', this, stack);
-      const decl = typeMap[this.ty];
-      debug('decl =', decl);
-      const field = decl.fields[this.field];
-      debug('field =', field);
-      const obj = pop(stack);
-      debug('obj =', obj);
-      const val = obj[field];
-      debug('val =', val);
-      stack.push(val);
-      debugDedent();
-    },
-    constVal(stack) {
-      debugInstr('constVal', this, stack);
-      const val = this.val;
-      debug('val =', val);
-      stack.push(val);
-      debugDedent();
-    },
-    foldSeq(stack) {
-      debugInstr('foldSeq', this, stack);
-      const imp = origImports[this.importIdx];
-      debug('import decl =', imp);
-      let val = pop(stack);
-      const list = pop(stack);
-      debug('list =', list);
-      debug('val =', val);
-      for (let i = 0; i < list.length; ++i) {
-        const elem = list[i];
-        debugIndent('elem', i, '=', elem);
-        val = imp.import.apply(null, [val, elem]);
-        debugDedent();
-        debug('val =', val);
-      }
-      stack.push(val);
-      debugDedent();
-    },
-    add(stack) {
-      debugInstr('add', this, stack);
-      const rhs = pop(stack);
-      const lhs = pop(stack);
-      debug('lhs, rhs =', lhs, rhs);
-      const val = rhs + lhs;
-      debug('val =', val);
-      stack.push(val);
-      debugDedent();
-    },
-    memToSeq(stack) {
-      debugInstr('memToSeq', this, stack);
-      const len = pop(stack);
-      const ptr = pop(stack);
-      debug('ptr, len =', ptr, len);
-      initMemory();
-      let seq = [];
-      for (var i = 0; i < len; ++i) {
-        seq.push(i32[(ptr >> 2) + i]);
-      }
-      debug('seq =', seq);
-      stack.push(seq);
-      debugDedent();
-    },
-    loadMem(stack) {
-      debugInstr('loadMem', this, stack);
-      const ptr = pop(stack); debug('ptr =', ptr);
-      initMemory();
-      const val = i32[ptr >> 2]; debug('val =', val);
-      stack.push(val);
-      debugDedent();
-    },
-    seqNew(stack) {
-      debugInstr('seqNew', this, stack);
-      stack.push([]);
-      debugDedent();
-    },
-    listPush(stack) {
-      debugInstr('listPush', this, stack);
-      const val = pop(stack); debug('val =', val);
-      const seq = pop(stack); debug('seq =', seq);
-      seq.push(val); debug('seq =', seq);
-      stack.push(seq);
-      debugDedent();
-    },
-    repeatWhile(stack) {
-      debugInstr('repeatWhile', this, stack);
-      const cond = origImports[this.condIdx]; debug('cond =', cond);
-      const step = origImports[this.stepIdx]; debug('step =', step);
-      let val = pop(stack); debug('val =', val);
-      let acc = pop(stack); debug('acc =', acc);
-      while (true) {
-        debugIndent('cond');
-        const run = cond.import.apply(null, [val]);
-        debugDedent(); debug('cond(val) =', run);
-        if (!run) { break }
-        debugIndent('step');
-        const results = step.import.apply(null, [acc, val]);
-        debugDedent();
-        acc = results[0]; debug('acc =', acc);
-        val = results[1]; debug('val =', val);
-      }
-      stack.push(acc); debug('acc =', acc);
-      debugDedent();
-    },
-    seqToMem(stack) {
-      debugInstr('seqToMem', this, stack);
-      const ptr = pop(stack); debug('ptr =', ptr);
-      const seq = pop(stack); debug('seq =', seq);
-      initMemory();
-      for (var i = 0; i < seq.length; ++i) {
-        i32[(ptr >> 2) + i] = seq[i];
-      }
-      stack.push(ptr);
-      stack.push(seq.length);
-      debugDedent();
-    },
-    storeMem(stack) {
-      debugInstr('storeMem', this, stack);
-      const val = pop(stack); debug('val =', val);
-      const ptr = pop(stack); debug('ptr =', ptr);
-      initMemory();
-      i32[ptr >> 2] = val;
-      debugDedent();
-    },
-  };
-
-  const interface = {};
-
-  function makeAdapter(name, params, results, instrs) {
-    return function() {
-      debugIndent('Called function:', name);
-      const stack = [];
-      for (var i = 0; i < instrs.length; ++i) {
-        const instr = instrs[i];
-        instr.func.apply(instr, [stack, arguments]);
-      }
-      debugDedent();
-      if (results.length == 1) {
-        debug('single return:', stack[stack.length - 1]);
-        return stack[stack.length - 1];
-      } else if (results.length > 1) {
-        debug('multiple return:', stack);
-        return stack;
-      }
-    };
-  }
-
-  var bindingSections = WebAssembly.Module.customSections(module, 'interface-types');
+  var bindingSections = WebAssembly.Module.customSections(module, 'webIDLBindings');
   for (var section = 0; section < bindingSections.length; ++section) {
     var bytes = new Uint8Array(bindingSections[section]);
     var byteIndex = 0;
 
-    function readByte() {
+    function readLEB() {
+      // TODO: don't assume LEBs are <128
       return bytes[byteIndex++];
     }
-    function readLEB() {
-      const bytes = [];
-      while (true) {
-        const byte = readByte();
-        bytes.push(byte & 0x7f);
-        if (!(byte & 0x80)) {
-          break;
-        }
-      }
-      // Bytes are stored little-endian, so read them in significance order
-      let val = 0;
-      for (let i = 0; i < bytes.length; ++i) {
-        const byte = bytes[bytes.length - i - 1];
-        val <<= 7;
-        val |= byte & 0x7f;
-      }
-      return val;
+    function readByte() {
+      return bytes[byteIndex++];
     }
     function readStr() {
       var len = readByte();
@@ -363,312 +85,121 @@ function polyfill(module, imports, getExports) {
       }
       return result;
     }
-    function readType() {
-      // TODO: interface types may be multi-byte, and depend on a type section
-      const ty = readLEB();
-      let name = typeMap[ty];
-      if (typeof name === 'object') {
-        name = name.name;
-      }
-      debug('ty =', ty, ":", name);
-      if (ty === 0x7ffb) { // seq
-        return [ty].concat(readType());
-      }
-      return ty;
-    }
-
-    function readList(f, debugMsg) {
-      if (debugMsg !== undefined) {
-        debugIndent(debugMsg);
-      } else {
-        debugIndent();
-      }
+    function readList(f) {
       var len = readByte();
       var result = [];
       for (var i = 0; i < len; ++i) {
-        debugIndent(i);
         result.push(f());
-        debugDedent();
       }
-      debugDedent();
       return result;
     }
 
-    function readInstr() {
-      const opcode = readByte();
-      let instr;
-      if (opcode === 0x00) { // arg.get
-        debugIndent('arg.get');
-        const arg = readLEB();
-        debug('arg =', arg);
-        instr = {
-          func: Instructions.argGet,
-          arg,
+    function readOutgoing() {
+      var kind = readByte();
+      if (kind == 0) { // as
+        var ty = readByte();
+        var off = readByte();
+        return {
+          func: as_outgoing,
+          args: [off],
         };
-      } else if (opcode === 0x01) { // call
-        debugIndent('call');
-        const importIdx = readLEB();
-        debug('importIdx =', importIdx);
-        instr = {
-          func: Instructions.call,
-          importIdx,
+      } else if (kind == 1) { // utf8-cstr
+        var ty = readByte();
+        var off = readByte();
+        return {
+          func: utf8_cstr,
+          args: [off],
         };
-      } else if (opcode === 0x02) { // call-export
-        debugIndent('call-export');
-        const exportName = readStr();
-        debug('exportName =', exportName);
-        instr = {
-          func: Instructions.callExport,
-          exportName,
-        };
-      } else if (opcode === 0x03) { // read-utf8
-        debugIndent('read-utf8');
-        instr = {
-          func: Instructions.readUtf8,
-        };
-      } else if (opcode === 0x04) { // write-utf8
-        debugIndent('write-utf8');
-        const alloc = readStr();
-        debug('alloc =', alloc);
-        instr = {
-          func: Instructions.writeUtf8,
-          alloc,
-        };
-      } else if (opcode === 0x05) { // as-wasm
-        debugIndent('as-wasm');
-        const ty = readType();
-        instr = {
-          func: Instructions.asWasm,
-          ty,
-        }
-      } else if (opcode === 0x06) { // as-interface
-        debugIndent('as-interface');
-        const ty = readType();
-        instr = {
-          func: Instructions.asInterface,
-          ty,
-        }
-      } else if (opcode === 0x07) { // table-ref-add
-        debugIndent('table-ref-add');
-        instr = {
-          func: Instructions.tableRefAdd,
-        };
-      } else if (opcode === 0x08) { // table-ref-get
-        debugIndent('table-ref-get');
-        instr = {
-          func: Instructions.tableRefGet,
-        };
-      } else if (opcode === 0x09) { // call-method
-        debugIndent('call-method');
-        const importIdx = readLEB();
-        debug('importIdx =', importIdx);
-        instr = {
-          func: Instructions.callMethod,
-          importIdx,
-        };
-      } else if (opcode === 0x0a) { // make-record
-        debugIndent('make-record');
-        const ty = readType();
-        instr = {
-          func: Instructions.makeRecord,
-          ty,
-        };
-      } else if (opcode === 0x0c) { // get-field
-        debugIndent('get-field');
-        const ty = readLEB();
-        debug('ty =', ty);
-        const field = readLEB();
-        debug('field =', field);
-        instr = {
-          func: Instructions.getField,
-          ty,
-          field,
-        };
-      } else if (opcode === 0x0d) { // const
-        debugIndent('const');
-        const ty = readType();
-        const val = readLEB();
-        instr = {
-          func: Instructions.constVal,
-          ty,
-          val,
-        };
-      } else if (opcode === 0x0e) { // fold-seq
-        debugIndent('fold-seq');
-        const importIdx = readLEB();
-        instr = {
-          func: Instructions.foldSeq,
-          importIdx,
-        };
-      } else if (opcode === 0x0f) { // add
-        debugIndent('add');
-        const ty = readType();
-        instr = {
-          func: Instructions.add,
-          ty,
-        };
-      } else if (opcode === 0x10) { // mem-to-seq
-        debugIndent('mem-to-seq');
-        const ty = readType(); debug('ty =', ty);
-        const mem = readStr(); debug('mem =', mem);
-        instr = {
-          func: Instructions.memToSeq,
-          ty,
-          mem,
-        };
-      } else if (opcode === 0x11) { // load
-        debugIndent('load');
-        const ty = readType(); debug('ty =', ty);
-        const mem = readStr(); debug('mem =', mem);
-        instr = {
-          func: Instructions.loadMem,
-          ty,
-          mem,
-        };
-      } else if (opcode === 0x12) { // seq.new
-        debugIndent('seq.new');
-        const ty = readType(); debug('ty =', ty);
-        instr = {
-          func: Instructions.seqNew,
-          ty,
-        };
-      } else if (opcode === 0x13) { // list.push
-        debugIndent('list.push');
-        instr = {
-          func: Instructions.listPush,
-        };
-      } else if (opcode === 0x14) { // repeat-while
-        debugIndent('repeat-while');
-        const condIdx = readLEB(); debug('condIdx =', condIdx);
-        const stepIdx = readLEB(); debug('stepIdx =', stepIdx);
-        instr = {
-          func: Instructions.repeatWhile,
-          condIdx,
-          stepIdx,
-        };
-      } else if (opcode === 0x15) { // seq-to-mem
-        debugIndent('seq-to-mem');
-        const ty = readType(); debug('ty =', ty);
-        const mem = readStr(); debug('mem =', mem);
-        instr = {
-          func: Instructions.seqToMem,
-          ty,
-          mem,
-        };
-      } else if (opcode === 0x16) { // store
-        debugIndent('store');
-        const ty = readType(); debug('ty =', ty);
-        const mem = readStr(); debug('mem =', mem);
-        instr = {
-          func: Instructions.storeMem,
-          ty,
-          mem,
-        };
-      } else {
-        throw 'Unknown opcode: ' + opcode;
       }
-      debugDedent();
-      return instr;
     }
 
-    const numExports = readLEB();
-    debug('export count:', numExports);
-    for (var i = 0; i < numExports; ++i) {
-      debugIndent('export', i);
-      const name = readStr();
-      debug('name =', name);
-      const params = readList(readType, 'params');
-      const results = readList(readType, 'results');
-      debugDedent();
-      exportDecls[name] = {
-        params,
-        results,
+    function readInExpr() {
+      var kind = readByte();
+      if (kind == 0) { // get
+        var idx = readByte();
+        return function(args) {
+          return args[idx];
+        };
+      }
+    }
+    function readIncoming() {
+      var kind = readByte();
+      if (kind == 0) { // as
+        var ty = readByte();
+        var inExpr = readInExpr();
+        return {
+          func: as_incoming,
+          inExpr,
+        }
+      } else if (kind == 1) { // alloc-utf8-cstr
+        var name = readStr();
+        var inExpr = readInExpr();
+        return {
+          func: alloc_utf8_cstr,
+          name,
+          inExpr,
+        }
+      }
+    }
+
+    function bindImport(f, importKind, params, results) {
+      return function() {
+        var args = [];
+        for (var i = 0; i < params.length; ++i) {
+          var param = params[i];
+          var incArgs = [];
+          for (var j = 0; j < param.args.length; ++j) {
+            incArgs.push(arguments[param.args[j]]);
+          }
+          args.push(param.func.apply(null, incArgs));
+        }
+        var retVal;
+        if (importKind === 0) {
+          // static
+          retVal = f.apply(null, args);
+        } else if (importKind === 1) {
+          // method
+          retVal = f.apply(args[0], args.slice(1));
+        }
+        if (results.length > 0) {
+          var result = results[0]; // todo: multi-return?
+          retVal = result.func.apply(result, [[retVal]]);
+        }
+        return retVal;
       };
     }
+    function makeExporter(param, result) {
+      return function(f) {
+        // maybe this works? TODO, find out
+        importKind = 0;
+        return bindImport(f, importKind, param, result);
+      }
+    }
 
-    const numTypes = readLEB();
-    debug('type count:', numTypes);
+    var numTypes = readLEB();
     for (var i = 0; i < numTypes; ++i) {
-      debugIndent('type', i);
-      const name = readStr();
-      debug('name =', name);
-      const fields = readList(readStr, 'fields');
-      debug('fields =', fields);
-      const types = readList(readType, 'types');
-      debugDedent();
-      typeMap[i] = {
-        name,
-        fields,
-        types,
-      };
+      // skip doing anything with types for now
+      // assumption, types are all 1 byte long, this will change
+      readByte();
     }
 
-    const numImportFuncs = readLEB();
-    debug('import count:', numImportFuncs);
-    for (var i = 0; i < numImportFuncs; ++i) {
-      debugIndent('import', i);
-      const namespace = readStr();
-      debug('namespace =', namespace);
-      const name = readStr();
-      debug('name =', name);
-      const params = readList(readType, 'params');
-      const results = readList(readType, 'results');
-      debugDedent();
-      origImports.push({
-        import: imports[namespace][name],
-        params,
-        results,
-      });
-    }
-
-    const numAdapters = readLEB();
-    debug('adapter count:', numAdapters);
-    for (var i = 0; i < numAdapters; ++i) {
-      debugIndent('adapter', i);
-      const kind = readByte();
-      debug('kind =', kind)
-      let namespace;
-      if (kind == 0) { // import
-        namespace = readStr();
-        debug('namespace =', namespace);
+    var numDecls = readLEB();
+    for (var i = 0; i < numDecls; ++i) {
+      var kind = readByte();
+      if (kind == 0) {
+        var namespace = readStr();
+        var name = readStr();
+        var importKind = readByte();
+        var params = readList(readOutgoing);
+        var results = readList(readIncoming);
+        imports[namespace][name] = bindImport(
+          imports[namespace][name], importKind, params, results);
+      } else if (kind == 1) {
+        var name = readStr();
+        var params = readList(readIncoming);
+        var results = readList(readOutgoing);
+        exportFixups[name] = makeExporter(params, results);
       }
-      const name = readStr();
-      debug('name =', name);
-      const params = readList(readType, 'params');
-      const results = readList(readType, 'results');
-      const instrs = readList(readInstr, 'instrs');
-      debugDedent();
-      const fn = makeAdapter(name, params, results, instrs);
-      if (kind == 0) { // import
-        imports[namespace][name] = fn;
-      } else if (kind == 1) { // export
-        interface[name] = fn;
-      } else if (kind == 2) { // helper function
-        origImports.push({
-          import: fn,
-          params,
-          results,
-        })
-      }
-    }
-
-    const numForwards = readLEB();
-    debug('forward count:', numForwards);
-    for (var i = 0; i < numForwards; ++i) {
-      debugIndent('forward', i);
-      const name = readStr();
-      debug('name =', name);
-      Object.defineProperty(interface, name, {
-        get() {
-          debug('Getting forwarded export:', name);
-          return getExports()[name];
-        }
-      });
-      debugDedent();
-    }
-
-    if (bytes.length != byteIndex) {
-      throw "Invalid read: len=" + bytes.length + ", read=" + byteIndex;
     }
   }
 
@@ -686,84 +217,19 @@ function polyfill(module, imports, getExports) {
   //   bindingTypes[1](res, ptr, len);
   // };
 
-  return interface;
+  return exportFixups;
 }
 
-// Taken wholesale from Emscripten, renamed from convertJsFunctionToWasm
-function jsToWasmFunc(func, sig) {
-  // The module is static, with the exception of the type section, which is
-  // generated based on the signature passed in.
-  var typeSection = [
-    0x01, // id: section,
-    0x00, // length: 0 (placeholder)
-    0x01, // count: 1
-    0x60, // form: func
-  ];
-  var sigRet = sig.slice(0, 1);
-  var sigParam = sig.slice(1);
-  var typeCodes = {
-    'i': 0x7f, // i32
-    'j': 0x7e, // i64
-    'f': 0x7d, // f32
-    'd': 0x7c, // f64
-  };
 
-  // Parameters, length + signatures
-  typeSection.push(sigParam.length);
-  for (var i = 0; i < sigParam.length; ++i) {
-    typeSection.push(typeCodes[sigParam[i]]);
-  }
-
-  // Return values, length + signatures
-  // With no multi-return in MVP, either 0 (void) or 1 (anything else)
-  if (sigRet == 'v') {
-    typeSection.push(0x00);
-  } else {
-    typeSection = typeSection.concat([0x01, typeCodes[sigRet]]);
-  }
-
-  // Write the overall length of the type section back into the section header
-  // (excepting the 2 bytes for the section id and length)
-  typeSection[1] = typeSection.length - 2;
-
-  // Rest of the module is static
-  var bytes = new Uint8Array([
-    0x00, 0x61, 0x73, 0x6d, // magic ("\0asm")
-    0x01, 0x00, 0x00, 0x00, // version: 1
-  ].concat(typeSection, [
-    0x02, 0x07, // import section
-      // (import "e" "f" (func 0 (type 0)))
-      0x01, 0x01, 0x65, 0x01, 0x66, 0x00, 0x00,
-    0x07, 0x05, // export section
-      // (export "f" (func 0 (type 0)))
-      0x01, 0x01, 0x66, 0x00, 0x00,
-  ]));
-
-   // We can compile this wasm module synchronously because it is very small.
-  // This accepts an import (at "e.f"), that it reroutes to an export (at "f")
-  var module = new WebAssembly.Module(bytes);
-  var instance = new WebAssembly.Instance(module, {
-    e: {
-      f: func
-    }
-  });
-  var wrappedFunc = instance.exports.f;
-  return wrappedFunc;
-}
-
-async function loadWasm(filename, imports, enableDebug) {
-  if (enableDebug) { debugEnabled = true; }
+async function loadWasm(filename, imports) {
   imports = imports || {};
   var bytes;
   if (typeof read === 'function') {
-    // D8
     bytes = read(filename, 'binary');
   } else if (typeof require === 'function') {
-    // NodeJS
     var fs = require('fs');
     bytes = fs.readFileSync(filename);
   } else {
-    // Browser
     var fetched = await fetch(filename);
     bytes = await fetched.arrayBuffer();
   }
@@ -773,20 +239,27 @@ async function loadWasm(filename, imports, enableDebug) {
   function getExports() {
     return instance.exports;
   }
-  var interface = polyfill(module, imports, getExports);
+  var fixups = polyfill(module, imports, getExports);
   instance = new WebAssembly.Instance(module, imports);
 
   // Actual WebAssembly.Instance exports are Read-Only, so we have to create a
   // fake object here
+  var fakeExports = {};
+  for (var name in instance.exports) {
+    fakeExports[name] = instance.exports[name];
+  }
+  for (var name in fixups) {
+    fakeExports[name] = fixups[name](fakeExports[name]);
+  }
   var fakeInstance = {};
   for (var name in instance) {
     fakeInstance[name] = instance[name];
   }
-  fakeInstance.exports = interface;
+  fakeInstance.exports = fakeExports;
   return fakeInstance;
 }
 
 var isNodeJS = typeof require !== 'undefined';
 if (isNodeJS) {
-  module.exports = { polyfill, loadWasm, jsToWasmFunc }
+  module.exports = { polyfill, loadWasm }
 }

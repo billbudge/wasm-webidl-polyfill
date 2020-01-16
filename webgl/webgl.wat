@@ -1,21 +1,16 @@
 (import "env" "memory" (memory $0 256 256))
-(import "env" "table" (table $0 7 anyref))
+(import "env" "table" (table $0 9 anyref))
 
-(data (i32.const 16) "a-canvas\00") ;; canvas ID
-(data (i32.const 32) "2d\00")       ;; 2D context
-(data (i32.const 48) "#ff2020\00")  ;; red color
-(data (i32.const 64) "#2020ff\00")  ;; blue color
-(data (i32.const 80) "lighter\00")  ;; global composite operation
-(data (i32.const 96) "nonzero\00")  ;; fill rule
+;;(data (i32.const 16) "a-canvas\00") ;; canvas ID
 
 ;; 256 pages * 64KiB bytes per page:
 ;; [256, 49408)       => items, 2000 * 6 * sizeof(float) = 49152 bytes.
 
 (import "document" "getElementById"
-  (func $document_getElementById (param i32) (result anyref))
+  (func $document_getElementById (param anyref anyref) (result anyref))
 )
 (import "host" "getContext"
-  (func $getContext (param anyref i32) (result anyref))
+  (func $getContext (param anyref anyref) (result anyref))
 )
 (import "host" "getRedColor"
   (func $getRedColor (result anyref))
@@ -48,7 +43,7 @@
   (func $createLinearGradient (param anyref f64 f64 f64 f64) (result anyref))
 )
 (import "host" "addColorStop"
-  (func $addColorStop (param anyref f64 i32))
+  (func $addColorStop (param anyref f64 anyref))
 )
 (import "host" "beginPath"
   (func $beginPath (param anyref))
@@ -60,7 +55,7 @@
   (func $stroke (param anyref))
 )
 (import "host" "fill"
-  (func $fill (param anyref) (param i32))
+  (func $fill (param anyref) (param anyref))
 )
 (import "host" "moveTo"
   (func $moveTo (param anyref) (param f64) (param f64))
@@ -105,18 +100,18 @@
   (local $tmp f64)
 
   (call $clearRect
-    (table.get $0 (i32.const 1))
+    (table.get $0 (i32.const 2))
     (f64.const 0)
     (f64.const 0)
     (f64.const 1000)
     (f64.const 1000)
   )
   (call $setGlobalCompositeOperation
-    (table.get $0 (i32.const 1))
+    (table.get $0 (i32.const 2))
     (i32.const 80)
   )
   (call $setLineWidth
-    (table.get $0 (i32.const 1))
+    (table.get $0 (i32.const 2))
     (f64.const 1)
   )
 
@@ -143,18 +138,18 @@
     )
 
     (call $setFillStyle
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
       (table.get $0
         (local.get $rgba1)
-        (i32.const 2)
+        (i32.const 3)
         (i32.add)
       )
     )
     (call $setStrokeStyle
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
       (table.get $0
         (local.get $rgba1)
-        (i32.const 2)
+        (i32.const 3)
         (i32.add)
       )
     )
@@ -190,10 +185,10 @@
       (if (i32.and)
       (then
         (call $beginPath
-          (table.get $0 (i32.const 1))
+          (table.get $0 (i32.const 2))
         )
         (call $moveTo
-          (table.get $0 (i32.const 1))
+          (table.get $0 (i32.const 2))
           (f64.promote_f32
             (local.get $x1)
           )
@@ -202,7 +197,7 @@
           )
         )
         (call $lineTo
-          (table.get $0 (i32.const 1))
+          (table.get $0 (i32.const 2))
           (f64.promote_f32
             (local.get $x2)
           )
@@ -211,7 +206,7 @@
           )
         )
         (call $stroke
-          (table.get $0 (i32.const 1))
+          (table.get $0 (i32.const 2))
         )
         (local.set $factor
           (local.get $factor)
@@ -231,10 +226,10 @@
     )
 
     (call $beginPath
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
     )
     (call $arc
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
       (local.get $x)
       (local.get $y)
       (local.get $rad)
@@ -245,18 +240,18 @@
       (i32.const 1)              ;; true
     )
     (call $closePath
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
     )
     (call $fill
-      (table.get $0 (i32.const 1))
-      (i32.const 96)
+      (table.get $0 (i32.const 2))
+      (table.get $0 (i32.const 8))
     )
 
     (call $beginPath
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
     )
     (call $arc
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
       (local.get $x)
       (local.get $y)
       (local.get $rad)
@@ -269,10 +264,10 @@
       (i32.const 1)              ;; true
     )
     (call $closePath
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
     )
     (call $stroke
-      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
     )
 
     (local.set $tmp
@@ -330,29 +325,30 @@
 )
 
 (func $main (export "main")
-;;  (local $redColor anyref)
-;;  (local $blueColor anyref)
-;;  (local $gradient anyref)
+  (local $redColor anyref)
+  (local $blueColor anyref)
+  (local $gradient anyref)
 
   (local $i i32)
 
-  (table.set $0 (i32.const 0)
+  (table.set $0 (i32.const 1)
     (call $document_getElementById
-      (i32.const 16)
+      (table.get $0 (i32.const 0))
+      (table.get $0 (i32.const 1))
     )
   )
 
-  (table.set $0 (i32.const 1)
+  (table.set $0 (i32.const 2)
     (call $getContext
-      (table.get $0 (i32.const 0))
-      (i32.const 32)
+      (table.get $0 (i32.const 1))
+      (table.get $0 (i32.const 2))
     )
   )
 
   (local.set $i (i32.const 4))
   (loop
     (local.get $i)
-    (i32.const 2)
+    (i32.const 3)
     (i32.add)
     (call $getColor
       (local.get $i)
@@ -373,7 +369,7 @@
 ;;  )
 ;;
 ;;  (call $fillRect
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;    (f64.const 100)
 ;;    (f64.const 100)
 ;;    (f64.const 200)
@@ -381,11 +377,11 @@
 ;;  )
 ;;
 ;;  (call $setFillStyle
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;    (local.get $redColor)
 ;;  )
 ;;  (call $fillRect
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;    (f64.const 175)
 ;;    (f64.const 175)
 ;;    (f64.const 200)
@@ -393,7 +389,7 @@
 ;;  )
 ;;  (local.set $gradient
 ;;    (call $createLinearGradient
-;;      (table.get $0 (i32.const 1))
+;;      (table.get $0 (i32.const 2))
 ;;      (f64.const 200)
 ;;      (f64.const 200)
 ;;      (f64.const 500)
@@ -403,31 +399,31 @@
 ;;  (call $addColorStop
 ;;    (local.get $gradient)
 ;;    (f64.const 0)
-;;    (i32.const 48)
+;;    (local.get $redColor)
 ;;  )
 ;;  (call $addColorStop
 ;;    (local.get $gradient)
 ;;    (f64.const 0.5)
-;;    (i32.const 64)
+;;    (local.get $blueColor)
 ;;  )
 ;;  (call $addColorStop
 ;;    (local.get $gradient)
 ;;    (f64.const 1)
-;;    (i32.const 48)
+;;    (local.get $redColor)
 ;;  )
 ;;  (call $setStrokeStyle
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;    (local.get $gradient)
 ;;  )
 ;;  (call $setLineWidth
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;    (f64.const 30)
 ;;  )
 ;;  (call $beginPath
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;  )
 ;;  (call $arc
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;    (f64.const 300)
 ;;    (f64.const 300)
 ;;    (f64.const 100)
@@ -436,7 +432,7 @@
 ;;    (i32.const 0)
 ;;  )
 ;;  (call $stroke
-;;    (table.get $0 (i32.const 1))
+;;    (table.get $0 (i32.const 2))
 ;;  )
 )
 
